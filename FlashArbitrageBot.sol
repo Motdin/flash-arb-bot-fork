@@ -26,6 +26,19 @@ import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
 */
 
 contract FlashArbBot is FlashLoanReceiverBase, Ownable {
+    // Cold wallet to receive profits; gasReserve keeps enough ETH for future tx fees
+    address public coldWallet;
+    uint256 public gasReserve;
+
+    /**
+        Set the cold wallet address and the minimum ETH to keep for gas.
+        Only the owner can call.
+    */
+    function setColdWallet(address _coldWallet, uint256 _gasReserve) external onlyOwner {
+        coldWallet = _coldWallet;
+        gasReserve = _gasReserve;
+    }
+
     using SafeMath for uint256;
     IUniswapV2Router02 public uniswapV2Router;
     IUniswapV2Router02 public sushiswapV1Router;
@@ -99,13 +112,30 @@ contract FlashArbBot is FlashLoanReceiverBase, Ownable {
     /**
         Withdraw all balances to owner
     */
-    function withdrawBalance() external onlyOwner {
-        // ETH
-        (bool sent, ) = msg.sender.call{value: address(this).balance}('');
-        require(sent, 'ETH transfer failed');
-        // DAI
-        dai.transfer(msg.sender, dai.balanceOf(address(this)));
-    }
+    /**
++        Withdraw all balances.
++        Sends ETH balance minus `gasReserve` to `coldWallet` (if set), otherwise to owner.
++        Sends all ERC20 tokens to `coldWallet` (or owner) as well.
++    */
++    function withdrawBalance() external onlyOwner {
++        uint256 ethBalance = address(this).balance;
++        uint256 toSend = 0;
++        if (coldWallet != address(0) && ethBalance > gasReserve) {
++            toSend = ethBalance - gasReserve;
++            (bool sent, ) = coldWallet.call{value: toSend}('');
++            require(sent, 'ETH transfer to cold wallet failed');
++        } else {
++            // fallback to owner if cold wallet not set or not enough ETH
++            (bool sent, ) = msg.sender.call{value: ethBalance}('');
++            require(sent, 'ETH transfer to owner failed');
++        }
++        // transfer all ERC20 tokens (DAI) to cold wallet if set, else owner
++        address tokenRecipient = coldWallet != address(0) ? coldWallet : msg.sender;
++        uint256 tokenBal = dai.balanceOf(address(this));
++        if (tokenBal > 0) {
++            dai.transfer(tokenRecipient, tokenBal);
++        }
++    }
 
     /**
         Initiate flash loan
@@ -170,7 +200,12 @@ contract FlashArbBot is FlashLoanReceiverBase, Ownable {
         if (finalAmount > params.amountIn) {
             profit = finalAmount - params.amountIn;
             emit ArbExecuted(msg.sender, params.tokenIn, params.tokenOut, profit);
+            // auto‑transfer profit to cold wallet if set
+            if (coldWallet != address(0) && profit > 0) {
+                IERC20(params.tokenIn).transfer(coldWallet, profit);
+            }
         }
+
     }
 
     // Event for profit monitoring
