@@ -110,20 +110,93 @@ contract FlashArbBot is FlashLoanReceiverBase, Ownable {
     /**
         Initiate flash loan
     */
-    function flashloan(
+    struct ArbParams {
+        address tokenIn;
+        address tokenOut;
+        uint256 amountIn;
+        uint256 minOut;
+        address routerIn;
+        address routerOut;
+    }
+
+    /**
+        Initiate flash loan with custom arbitrage parameters
+    */
+    function flashloanArb(
         address _flashAsset,
         uint256 _flashAmount,
-        address _daiTokenAddress,
-        uint256 _amountToTrade,
-        uint256 _tokensOut
+        ArbParams calldata params
     ) external onlyOwner {
-        bytes memory data = "";
-        daiTokenAddress = _daiTokenAddress;
-        dai = IERC20(daiTokenAddress);
-        amountToTrade = _amountToTrade;
-        tokensOut = _tokensOut;
+        // Encode parameters to pass to executeOperation
+        bytes memory data = abi.encode(params);
         ILendingPool lendingPool = ILendingPool(addressesProvider.getLendingPool());
         lendingPool.flashLoan(address(this), _flashAsset, _flashAmount, data);
+    }
+
+    /**
+        Custom arbitrage executed during flash loan
+    */
+    function executeCustomArbitrage(ArbParams memory params) internal {
+        // Approve routerIn to spend tokenIn
+        IERC20(params.tokenIn).approve(params.routerIn, params.amountIn);
+        // Swap tokenIn -> tokenOut on routerIn
+        IUniswapV2Router02 routerIn = IUniswapV2Router02(params.routerIn);
+        address[] memory path1 = new address[](2);
+        path1[0] = params.tokenIn;
+        path1[1] = params.tokenOut;
+        uint256 outAmount = routerIn.swapExactTokensForTokens(
+            params.amountIn,
+            params.minOut,
+            path1,
+            address(this),
+            deadline
+        )[1];
+        // Approve routerOut to spend tokenOut
+        IERC20(params.tokenOut).approve(params.routerOut, outAmount);
+        // Swap back tokenOut -> tokenIn on routerOut (simple reverse swap)
+        IUniswapV2Router02 routerOut = IUniswapV2Router02(params.routerOut);
+        address[] memory path2 = new address[](2);
+        path2[0] = params.tokenOut;
+        path2[1] = params.tokenIn;
+        uint256 finalAmount = routerOut.swapExactTokensForTokens(
+            outAmount,
+            0,
+            path2,
+            address(this),
+            deadline
+        )[1];
+        // Profit is finalAmount - params.amountIn
+        uint256 profit = 0;
+        if (finalAmount > params.amountIn) {
+            profit = finalAmount - params.amountIn;
+            emit ArbExecuted(msg.sender, params.tokenIn, params.tokenOut, profit);
+        }
+    }
+
+    // Event for profit monitoring
+    event ArbExecuted(address indexed initiator, address tokenIn, address tokenOut, uint256 profit);
+
+    // Modified executeOperation to handle optional params
+    function executeOperation(
+        address _reserve,
+        uint256 _amount,
+        uint256 _fee,
+        bytes calldata _params
+    ) external override {
+        require(_amount <= getBalanceInternal(address(this), _reserve), "Invalid balance");
+        if (_params.length > 0) {
+            // Custom arbitrage path
+            ArbParams memory custom = abi.decode(_params, (ArbParams));
+            executeCustomArbitrage(custom);
+        } else {
+            // default arbitrage
+            try this.executeArbitrage() {
+            } catch Error(string memory) {
+            } catch (bytes memory) {
+            }
+        }
+        uint256 totalDebt = _amount.add(_fee);
+        transferFundsBackToPoolInternal(_reserve, totalDebt);
     }
 
     function getPathForETHToToken(address token) private view returns (address[] memory) {
