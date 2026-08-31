@@ -1,0 +1,21 @@
+{
+  "name": "flash-arb-bot",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "compile": "npx hardhat compile",
+    "deploy": "npx hardhat run scripts/deploy.js --network sepolia",
+    "start": "node bot.js"
+  },
+  "devDependencies": {
+    "hardhat": "^2.22.5",
+    "@nomiclabs/hardhat-ethers": "^2.2.3",
+    "ethers": "^6.9.0"
+  },
+  "dependencies": {
+    "@aave/protocol-v3": "^1.0.0",
+    "@uniswap/v2-periphery": "^1.1.0",
+    "@openzeppelin/contracts": "^5.0.0",
+    "dotenv": "^16.4.5"
+  }
+}
