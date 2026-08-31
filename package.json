@@ -13,9 +13,10 @@
     "ethers": "^6.9.0"
   },
   "dependencies": {
-    "@aave/protocol-v3": "^1.0.0",
-    "@uniswap/v2-periphery": "^1.1.0",
+    
+    "@uniswap/v2-periphery": "1.1.0-beta.0",
     "@openzeppelin/contracts": "^5.0.0",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "node-fetch": "^3.3.2"
   }
 }
