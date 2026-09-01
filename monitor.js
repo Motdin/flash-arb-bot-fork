@@ -59,21 +59,30 @@ async function checkArbitrage() {
     console.log('🔎 outUni (Uniswap)  =', ethers.utils.formatUnits(outUni, 18));
     console.log('🔎 outSushi (Sushiswap) =', ethers.utils.formatUnits(outSushi, 18));
 
-    // Determine arbitrage direction
-    let routerBuy, routerSell, profitCandidate;
+    // Determine arbitrage direction and calculate round‑trip profit
+    let routerBuy, routerSell;
+    // Choose router that yields more WETH for the same DAI as the BUY side
     if (outUni.gt(outSushi)) {
-      routerBuy = routerOut; // cheaper on Sushi
-      routerSell = routerIn;
-      profitCandidate = outUni.sub(outSushi);
-    } else if (outSushi.gt(outUni)) {
+      // Uniswap gives more WETH → buy on Uniswap, sell on Sushiswap
       routerBuy = routerIn;
       routerSell = routerOut;
-      profitCandidate = outSushi.sub(outUni);
     } else {
-      sendTelegramMessage('🔎 No arbitrage opportunity detected at this block.');
-      return;
+      // Sushiswap gives more WETH → buy on Sushiswap, sell on Uniswap
+      routerBuy = routerOut;
+      routerSell = routerIn;
     }
 
+    // 1️⃣ DAI → WETH on the BUY router
+    const [, amountWETH] = await (routerBuy === routerIn ? uni : sushi)
+      .getAmountsOut(amountIn, [tokenIn, tokenOut]);
+
+    // 2️⃣ WETH → DAI on the SELL router
+    const [, amountDAIOut] = await (routerSell === routerIn ? uni : sushi)
+      .getAmountsOut(amountWETH, [tokenOut, tokenIn]);
+
+    const profitCandidate = amountDAIOut.sub(amountIn);
+
+    if (profitCandidate.lte(0)) { sendTelegramMessage('🔎 No arbitrage opportunity detected at this block.'); return; }
     // ---------- Cost calculations ----------
     const FLASH_FEE_BPS = 9; // 0.09% Aave flash‑loan fee
     const SLIPPAGE_BPS = 50; // 0.5% slippage tolerance
