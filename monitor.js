@@ -47,11 +47,16 @@ async function checkArbitrage() {
       [process.env.DAI_TOKEN,  process.env.WETH_TOKEN],
       [process.env.USDC_TOKEN, process.env.WETH_TOKEN]
     ];
-    const amountIn = ethers.utils.parseUnits('100', 18); // 100 unit per token
     const SLIPPAGE_BPS = 50; // 0.5% slippage tolerance
-
-    // Helper untuk memindai satu pasangan
-    async function scanPair(tokenIn, tokenOut) {
+ 
+     // Helper untuk memindai satu pasangan (menyesuaikan jumlah berdasarkan desimal token)
+     async function scanPair(tokenIn, tokenOut) {
+       // Tentukan jumlah input dengan desimal yang tepat
+       let tokenDecimals = 18; // default ERC20 18 desimal
+       if (process.env.USDC_TOKEN && tokenIn.toLowerCase() === process.env.USDC_TOKEN.toLowerCase()) {
+         tokenDecimals = 6;
+       }
+       const amountIn = ethers.utils.parseUnits('5000', tokenDecimals); // 5000 token dengan desimal yang sesuai
       // Query price from Uniswap V2 and Sushiswap V2 (fallback to V3 if you later add logic)
       const routerIn = process.env.UNISWAP_ROUTER;
       const routerOut = process.env.SUSHISWAP_ROUTER;
