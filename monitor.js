@@ -115,7 +115,8 @@ async function checkArbitrage() {
 
     // Ensure profit exceeds all costs
     if (profitCandidate.lte(totalCost)) {
-      sendTelegramMessage(`📉 Detected price gap but net profit (${ethers.utils.formatUnits(profitCandidate.sub(totalCost), 18)} ${tokenIn}) ≤ total cost (${ethers.utils.formatUnits(totalCost, 18)}).`);
+      const netLoss = totalCost.sub(profitCandidate);
+      sendTelegramMessage(`📉 Detected price gap but net profit would be -${ethers.utils.formatUnits(netLoss, 18)} ${tokenIn} (loss) ≤ total cost (${ethers.utils.formatUnits(totalCost, 18)}).`);
       return;
     }
 
