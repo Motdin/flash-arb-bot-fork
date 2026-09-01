@@ -54,8 +54,8 @@ async function checkArbitrage() {
     const pathTokens = [tokenIn, tokenOut];
     const uni = new ethers.Contract(routerIn, ['function getAmountsOut(uint256 amountIn, address[] calldata path) external view returns (uint256[] memory amounts)'], provider);
     const sushi = new ethers.Contract(routerOut, ['function getAmountsOut(uint256 amountIn, address[] calldata path) external view returns (uint256[] memory amounts)'], provider);
-    const [outUni] = await uni.getAmountsOut(amountIn, pathTokens);
-    const [outSushi] = await sushi.getAmountsOut(amountIn, pathTokens);
+    const [, outUni] = await uni.getAmountsOut(amountIn, pathTokens);
+    const [, outSushi] = await sushi.getAmountsOut(amountIn, pathTokens);
     console.log('🔎 outUni (Uniswap)  =', ethers.utils.formatUnits(outUni, 18));
     console.log('🔎 outSushi (Sushiswap) =', ethers.utils.formatUnits(outSushi, 18));
 
