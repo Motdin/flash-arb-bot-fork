@@ -81,14 +81,19 @@ async function checkArbitrage() {
     const feeData = await provider.getFeeData();
     const gasPrice = feeData.gasPrice || ethers.utils.parseUnits('1', 'gwei');
     const estGas = await flash.estimateGas.flashloanArb(tokenIn, tokenOut, amountIn, minOut, routerBuy, routerSell);
-    const gasCost = gasPrice.mul(estGas);
+    const gasCostWei = gasPrice.mul(estGas); // gas cost in wei (ETH)
+    // Get ETH price in DAI (1 ETH -> DAI) via Uniswap
+    const ethAmount = ethers.utils.parseUnits('1', 18);
+    const [, ethPriceInDai] = await uni.getAmountsOut(ethAmount, [process.env.WETH_TOKEN, process.env.DAI_TOKEN]);
+    const gasCost = gasCostWei.mul(ethPriceInDai).div(ethers.utils.parseUnits('1', 18)); // convert to DAI
     const slippageCost = profitCandidate.mul(SLIPPAGE_BPS).div(10000);
     const totalCost = flashFee.add(gasCost).add(slippageCost);
 
     console.log('💰 profitCandidate =', ethers.utils.formatUnits(profitCandidate, 18));
     console.log('💸 flashFee       =', ethers.utils.formatUnits(flashFee, 18));
     console.log('⛽ estimatedGas   =', estGas.toString(), 'gas @', ethers.utils.formatUnits(gasPrice, 'gwei'), 'gwei');
-    console.log('🧾 gasCost        =', ethers.utils.formatUnits(gasCost, 18));
+    console.log('🧾 gasCostWei    =', ethers.utils.formatUnits(gasCostWei, 18), 'ETH');
+    console.log('💱 gasCost (DAI)  =', ethers.utils.formatUnits(gasCost, 18));
     console.log('↔️ slippageCost   =', ethers.utils.formatUnits(slippageCost, 18));
     console.log('🧮 totalCost      =', ethers.utils.formatUnits(totalCost, 18));
 
