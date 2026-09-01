@@ -33,18 +33,22 @@ if (!/^0x[0-9a-fA-F]{64}$/.test(process.env.PRIVATE_KEY)) {
 }
 // -----------------------------------------------------------
 
+// Provider & signer (wallet) – created once to avoid resource leak
+const provider = new ethers.providers.JsonRpcProvider(process.env.RPC_URL);
+const signer = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+const flash = new ethers.Contract(process.env.FLASH_CONTRACT_ADDRESS, flashAbi, signer);
+
 async function checkArbitrage() {
+  if (global.isRunning) return; // prevent overlap
+  global.isRunning = true;
   try {
-    // Provider & signer (wallet)
-    const provider = new ethers.providers.JsonRpcProvider(process.env.RPC_URL);
-    const signer = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
-    const flash = new ethers.Contract(process.env.FLASH_CONTRACT_ADDRESS, flashAbi, signer);
+    // Load parameters
     const tokenIn = process.env.DAI_TOKEN; // token to borrow
     const tokenOut = process.env.WETH_TOKEN; // token to receive
     const amountIn = ethers.utils.parseUnits('100', 18); // 100 DAI
-    const minOut = ethers.utils.parseUnits('0.05', 18); // minimal output
+    const minOut = ethers.utils.parseUnits('0.05', 18);
 
-    // Get price from two DEXes
+    // Query price from Uniswap V2 and Sushiswap V2
     const routerIn = process.env.UNISWAP_ROUTER;
     const routerOut = process.env.SUSHISWAP_ROUTER;
     const pathTokens = [tokenIn, tokenOut];
@@ -55,37 +59,64 @@ async function checkArbitrage() {
     console.log('🔎 outUni (Uniswap)  =', ethers.utils.formatUnits(outUni, 18));
     console.log('🔎 outSushi (Sushiswap) =', ethers.utils.formatUnits(outSushi, 18));
 
+    // Determine arbitrage direction
     let routerBuy, routerSell, profitCandidate;
-    if (outUni > outSushi) {
-      // buy on Sushi (cheaper), sell on Uni
-      routerBuy = routerOut;
+    if (outUni.gt(outSushi)) {
+      routerBuy = routerOut; // cheaper on Sushi
       routerSell = routerIn;
-      profitCandidate = outUni - outSushi;
-    } else if (outSushi > outUni) {
+      profitCandidate = outUni.sub(outSushi);
+    } else if (outSushi.gt(outUni)) {
       routerBuy = routerIn;
       routerSell = routerOut;
-      profitCandidate = outSushi - outUni;
+      profitCandidate = outSushi.sub(outUni);
     } else {
-      // no price difference
       sendTelegramMessage('🔎 No arbitrage opportunity detected at this block.');
       return;
     }
 
-    // Minimum profit threshold (0.1% of amountIn)
-    const minProfit = amountIn * 10n / 10000n; // 0.1%
-    if (profitCandidate < minProfit) {
-      sendTelegramMessage(`📉 Detected price gap but profit (${ethers.utils.formatUnits(profitCandidate, 18)} token) < threshold (${ethers.utils.formatUnits(minProfit, 18)}).`);
+    // ---------- Cost calculations ----------
+    const FLASH_FEE_BPS = 9; // 0.09% Aave flash‑loan fee
+    const SLIPPAGE_BPS = 50; // 0.5% slippage tolerance
+    const flashFee = amountIn.mul(FLASH_FEE_BPS).div(10000);
+    const feeData = await provider.getFeeData();
+    const gasPrice = feeData.gasPrice || ethers.utils.parseUnits('1', 'gwei');
+    const estGas = await flash.estimateGas.flashloanArb(tokenIn, tokenOut, amountIn, minOut, routerBuy, routerSell);
+    const gasCost = gasPrice.mul(estGas);
+    const slippageCost = profitCandidate.mul(SLIPPAGE_BPS).div(10000);
+    const totalCost = flashFee.add(gasCost).add(slippageCost);
+
+    console.log('💰 profitCandidate =', ethers.utils.formatUnits(profitCandidate, 18));
+    console.log('💸 flashFee       =', ethers.utils.formatUnits(flashFee, 18));
+    console.log('⛽ estimatedGas   =', estGas.toString(), 'gas @', ethers.utils.formatUnits(gasPrice, 'gwei'), 'gwei');
+    console.log('🧾 gasCost        =', ethers.utils.formatUnits(gasCost, 18));
+    console.log('↔️ slippageCost   =', ethers.utils.formatUnits(slippageCost, 18));
+    console.log('🧮 totalCost      =', ethers.utils.formatUnits(totalCost, 18));
+
+    // Ensure profit exceeds all costs
+    if (profitCandidate.lte(totalCost)) {
+      sendTelegramMessage(`📉 Detected price gap but net profit (${ethers.utils.formatUnits(profitCandidate.sub(totalCost), 18)} ${tokenIn}) ≤ total cost (${ethers.utils.formatUnits(totalCost, 18)}).`);
       return;
     }
 
-    // Execute flashloan arbitrage
+    // ---------- Static simulation ----------
+    try {
+      await flash.callStatic.flashloanArb(tokenIn, tokenOut, amountIn, minOut, routerBuy, routerSell);
+    } catch (simErr) {
+      console.error('⚠️ Simulation failed:', simErr);
+      sendTelegramMessage(`⚠️ Simulation of flashloan failed: ${simErr.message}`);
+      return;
+    }
+
+    // ---------- Execute arbitrage ----------
     const tx = await flash.flashloanArb(tokenIn, tokenOut, amountIn, minOut, routerBuy, routerSell);
     const receipt = await tx.wait();
-    const msg = `✅ Arbitrage executed! Tx: ${receipt.transactionHash}\nProfit: ${ethers.utils.formatUnits(profitCandidate, 18)} ${tokenIn}\nRouted via buy ${routerBuy} → sell ${routerSell}`;
-    sendTelegramMessage(msg);
-  } catch (err) {
+    const netProfit = profitCandidate.sub(totalCost);
+    const msg = `✅ Arbitrage executed! Tx: ${receipt.transactionHash}\nGross profit: ${ethers.utils.formatUnits(profitCandidate, 18)} ${tokenIn}\nNet profit after fees & gas: ${ethers.utils.formatUnits(netProfit, 18)} ${tokenIn}\nRouted via buy ${routerBuy} → sell ${routerSell}`;
+    sendTelegramMessage(msg);  } catch (err) {
     console.error('⚠️ Error in monitor (caught):', err.stack);
     sendTelegramMessage(`⚠️ Error in monitor: ${err.message}`);
+  } finally {
+    global.isRunning = false;
   }
 }
 
