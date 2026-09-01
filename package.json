@@ -10,7 +10,7 @@
   "devDependencies": {
     "hardhat": "^2.22.5",
     "@nomiclabs/hardhat-ethers": "^2.2.3",
-    "ethers": "^6.9.0"
+    "ethers": "^5.7.2"
   },
   "dependencies": {
     

@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26; // updated
 
-import "@aave/protocol-v3/contracts/flashloan/base/FlashLoanReceiverBase.sol";
-import "@aave/protocol-v3/contracts/interfaces/ILendingPoolAddressesProvider.sol";
-import "@aave/protocol-v3/contracts/interfaces/ILendingPool.sol";
+import "./AaveMock.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
@@ -25,7 +23,7 @@ import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
     - Aave LendingPoolAddressesProvider:    0x24a42fD28C976A61Df5D00D0599C34c4f90748c8
 */
 
-contract FlashArbBot is FlashLoanReceiverBase, Ownable {
+contract FlashArbitrageBot is FlashLoanReceiverBase, Ownable {
     // Cold wallet to receive profits; gasReserve keeps enough ETH for future tx fees
     address public coldWallet;
     uint256 public gasReserve;
@@ -47,7 +45,8 @@ contract FlashArbBot is FlashLoanReceiverBase, Ownable {
     address public daiTokenAddress;
     uint256 public amountToTrade;
     uint256 public tokensOut;
-    ILendingPoolAddressesProvider public addressesProvider;
+    ILendingPoolAddressesProvider public aaveProvider;
+
 
     /**
         Initialize deployment parameters
@@ -55,9 +54,9 @@ contract FlashArbBot is FlashLoanReceiverBase, Ownable {
     constructor(
         address _aaveAddressesProvider,
         IUniswapV2Router02 _uniswapV2Router,
-        IUniswapV2Router02 _sushiswapV1Router
-    ) FlashLoanReceiverBase(_aaveAddressesProvider) {
-        addressesProvider = ILendingPoolAddressesProvider(_aaveAddressesProvider);
+        IUniswapV2Router02 _sushiswapV1Router,
+        address _owner
+    ) FlashLoanReceiverBase(_aaveAddressesProvider) Ownable(_owner) {
         sushiswapV1Router = _sushiswapV1Router;
         uniswapV2Router = _uniswapV2Router;
         deadline = block.timestamp + 300; // 5 minutes
@@ -66,22 +65,7 @@ contract FlashArbBot is FlashLoanReceiverBase, Ownable {
     /**
         Mid-flashloan logic i.e. what you do with the temporarily acquired flash liquidity
     */
-    function executeOperation(
-        address _reserve,
-        uint256 _amount,
-        uint256 _fee,
-        bytes calldata _params
-    ) external override {
-        require(_amount <= getBalanceInternal(address(this), _reserve), "Invalid balance");
-        // execute arbitrage strategy – keep‑try/catch for safety
-        try this.executeArbitrage() {
-        } catch Error(string memory) {
-        } catch (bytes memory) {
-        }
-        // repay loan + fee
-        uint256 totalDebt = _amount.add(_fee);
-        transferFundsBackToPoolInternal(_reserve, totalDebt);
-    }
+    // First executeOperation removed – later version (lines 212‑233) handles custom params
 
     /**
         Simple arbitrage: UniswapV2 -> SushiswapV1
@@ -113,29 +97,29 @@ contract FlashArbBot is FlashLoanReceiverBase, Ownable {
         Withdraw all balances to owner
     */
     /**
-+        Withdraw all balances.
-+        Sends ETH balance minus `gasReserve` to `coldWallet` (if set), otherwise to owner.
-+        Sends all ERC20 tokens to `coldWallet` (or owner) as well.
-+    */
-+    function withdrawBalance() external onlyOwner {
-+        uint256 ethBalance = address(this).balance;
-+        uint256 toSend = 0;
-+        if (coldWallet != address(0) && ethBalance > gasReserve) {
-+            toSend = ethBalance - gasReserve;
-+            (bool sent, ) = coldWallet.call{value: toSend}('');
-+            require(sent, 'ETH transfer to cold wallet failed');
-+        } else {
-+            // fallback to owner if cold wallet not set or not enough ETH
-+            (bool sent, ) = msg.sender.call{value: ethBalance}('');
-+            require(sent, 'ETH transfer to owner failed');
-+        }
-+        // transfer all ERC20 tokens (DAI) to cold wallet if set, else owner
-+        address tokenRecipient = coldWallet != address(0) ? coldWallet : msg.sender;
-+        uint256 tokenBal = dai.balanceOf(address(this));
-+        if (tokenBal > 0) {
-+            dai.transfer(tokenRecipient, tokenBal);
-+        }
-+    }
+    * Withdraw all balances.
+    * Sends ETH balance minus `gasReserve` to `coldWallet` (if set), otherwise to owner.
+    * Sends all ERC20 tokens to `coldWallet` (or owner) as well.
+    */
+    function withdrawBalance() external onlyOwner {
+        uint256 ethBalance = address(this).balance;
+        uint256 toSend = 0;
+        if (coldWallet != address(0) && ethBalance > gasReserve) {
+            toSend = ethBalance - gasReserve;
+            (bool sent, ) = coldWallet.call{value: toSend}('');
+            require(sent, 'ETH transfer to cold wallet failed');
+        } else {
+            // fallback to owner if cold wallet not set or not enough ETH
+            (bool sent, ) = msg.sender.call{value: ethBalance}('');
+            require(sent, 'ETH transfer to owner failed');
+        }
+        // transfer all ERC20 tokens (DAI) to cold wallet if set, else owner
+        address tokenRecipient = coldWallet != address(0) ? coldWallet : msg.sender;
+        uint256 tokenBal = dai.balanceOf(address(this));
+        if (tokenBal > 0) {
+            dai.transfer(tokenRecipient, tokenBal);
+        }
+    }
 
     /**
         Initiate flash loan
@@ -159,7 +143,8 @@ contract FlashArbBot is FlashLoanReceiverBase, Ownable {
     ) external onlyOwner {
         // Encode parameters to pass to executeOperation
         bytes memory data = abi.encode(params);
-        ILendingPool lendingPool = ILendingPool(addressesProvider.getLendingPool());
+        // ILendingPool lendingPool = ILendingPool(addressesProvider.getLendingPool());
+        ILendingPool lendingPool = ILendingPool(aaveProvider.getLendingPool());
         lendingPool.flashLoan(address(this), _flashAsset, _flashAmount, data);
     }
 
