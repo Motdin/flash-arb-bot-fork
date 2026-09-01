@@ -46,7 +46,8 @@ async function checkArbitrage() {
     const tokenIn = process.env.DAI_TOKEN; // token to borrow
     const tokenOut = process.env.WETH_TOKEN; // token to receive
     const amountIn = ethers.utils.parseUnits('100', 18); // 100 DAI
-    const minOut = ethers.utils.parseUnits('0.05', 18);
+    const SLIPPAGE_BPS = 50; // 0.5% slippage tolerance
+    // minOut will be calculated after obtaining the quoted amountWETH and applying slippage
 
     // Query price from Uniswap V2 and Sushiswap V2
     const routerIn = process.env.UNISWAP_ROUTER;
@@ -76,16 +77,22 @@ async function checkArbitrage() {
     const [, amountWETH] = await (routerBuy === routerIn ? uni : sushi)
       .getAmountsOut(amountIn, [tokenIn, tokenOut]);
 
-    // 2️⃣ WETH → DAI on the SELL router
+    // Apply slippage tolerance to define minOut for the flashloan contract
+    const slippageAllowance = amountWETH.mul(SLIPPAGE_BPS).div(10000);
+    const minOut = amountWETH.sub(slippageAllowance);
     const [, amountDAIOut] = await (routerSell === routerIn ? uni : sushi)
       .getAmountsOut(amountWETH, [tokenOut, tokenIn]);
 
+    if (amountDAIOut.lte(amountIn)) {
+      sendTelegramMessage('\ud83d\udd0e No arbitrage opportunity detected at this block.');
+      return;
+    }
     const profitCandidate = amountDAIOut.sub(amountIn);
 
-    if (profitCandidate.lte(0)) { sendTelegramMessage('🔎 No arbitrage opportunity detected at this block.'); return; }
+
     // ---------- Cost calculations ----------
     const FLASH_FEE_BPS = 9; // 0.09% Aave flash‑loan fee
-    const SLIPPAGE_BPS = 50; // 0.5% slippage tolerance
+    // SLIPPAGE_BPS already defined earlier
     const flashFee = amountIn.mul(FLASH_FEE_BPS).div(10000);
     const feeData = await provider.getFeeData();
     const gasPrice = feeData.gasPrice || ethers.utils.parseUnits('1', 'gwei');
